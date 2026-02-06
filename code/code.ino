@@ -65,6 +65,7 @@ struct Config {
   PushChannel pushChannels[MAX_PUSH_CHANNELS];  // 多推送通道
   String webUser;      // Web管理账号
   String webPass;      // Web管理密码
+  String numberBlackList;  // 号码黑名单（换行符分隔）
 };
 
 // 默认Web管理账号密码
@@ -124,6 +125,7 @@ void saveConfig() {
   preferences.putString("adminPhone", config.adminPhone);
   preferences.putString("webUser", config.webUser);
   preferences.putString("webPass", config.webPass);
+  preferences.putString("numBlkList", config.numberBlackList);
   
   // 保存推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
@@ -152,6 +154,7 @@ void loadConfig() {
   config.adminPhone = preferences.getString("adminPhone", "");
   config.webUser = preferences.getString("webUser", DEFAULT_WEB_USER);
   config.webPass = preferences.getString("webPass", DEFAULT_WEB_PASS);
+  config.numberBlackList = preferences.getString("numBlkList", "");
   
   // 加载推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
@@ -324,6 +327,15 @@ const char* htmlPage = R"rawliteral(
         <div class="form-group">
           <label>管理员手机号</label>
           <input type="text" name="adminPhone" value="%ADMIN_PHONE%" placeholder="13800138000">
+        </div>
+      </div>
+      
+      <div class="section">
+        <div class="section-title">🚫 号码黑名单</div>
+        <div class="hint" style="margin-bottom:15px;">每行一个号码，来自黑名单号码的短信将被忽略（不转发、不执行命令）。</div>
+        <div class="form-group">
+          <label>黑名单号码</label>
+          <textarea name="numberBlackList" rows="5">%NUMBER_BLACK_LIST%</textarea>
         </div>
       </div>
       
@@ -742,6 +754,7 @@ void handleRoot() {
   html.replace("%SMTP_PASS%", config.smtpPass);
   html.replace("%SMTP_SEND_TO%", config.smtpSendTo);
   html.replace("%ADMIN_PHONE%", config.adminPhone);
+  html.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
   
   // 生成推送通道HTML
   String channelsHtml = "";
@@ -1530,6 +1543,7 @@ void handleSave() {
   config.smtpPass = server.arg("smtpPass");
   config.smtpSendTo = server.arg("smtpSendTo");
   config.adminPhone = server.arg("adminPhone");
+  config.numberBlackList = server.arg("numberBlackList");
   
   // 保存推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
@@ -1719,6 +1733,36 @@ void resetModule() {
   else    Serial.println("模组AT仍未响应（检查EN接线/供电/波特率）");
 }
 
+
+// 检查发送者是否在号码黑名单中
+bool isInNumberBlackList(const char* sender) {
+  if (config.numberBlackList.length() == 0) return false;
+  
+  String senderStr = String(sender);
+  // 去除发送者号码的+86前缀
+  if (senderStr.startsWith("+86")) {
+    senderStr = senderStr.substring(3);
+  }
+  
+  String list = config.numberBlackList;
+  
+  int start = 0;
+  while (start <= (int)list.length()) {
+    int end = list.indexOf('\n', start);
+    if (end == -1) end = list.length();
+    
+    String line = list.substring(start, end);
+    line.trim();
+    
+    if (line.length() > 0 && line.equals(senderStr)) {
+      return true;
+    }
+    
+    start = end + 1;
+  }
+  
+  return false;
+}
 
 // 检查发送者是否为管理员
 bool isAdmin(const char* sender) {
@@ -2391,6 +2435,12 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
   Serial.println("时间戳: " + String(timestamp));
   Serial.println("内容: " + String(text));
   Serial.println("====================");
+
+  // 检查是否在号码黑名单中
+  if (isInNumberBlackList(sender)) {
+    Serial.println("发送者在号码黑名单中，忽略该短信");
+    return;
+  }
 
   // 检查是否为管理员命令
   if (isAdmin(sender)) {
