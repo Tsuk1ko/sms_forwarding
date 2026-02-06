@@ -1986,6 +1986,86 @@ String jsonEscape(const String& str) {
   return result;
 }
 
+// 格式化时间戳：将 YYMMDDHHMMSS 转换为 YY/MM/DD HH:MM:SS
+String formatTimestamp(const char* timestamp) {
+  if (timestamp == nullptr || strlen(timestamp) < 12) {
+    return String(timestamp);  // 长度不足时返回原始字符串
+  }
+  
+  char formatted[20];
+  // 格式：YY/MM/DD HH:MM:SS
+  snprintf(formatted, sizeof(formatted), "%.2s/%.2s/%.2s %.2s:%.2s:%.2s",
+           timestamp,      // YY
+           timestamp + 2,  // MM
+           timestamp + 4,  // DD
+           timestamp + 6,  // HH
+           timestamp + 8,  // MM
+           timestamp + 10  // SS
+  );
+  return String(formatted);
+}
+
+// 提取验证码：从字符串中提取4位及以上的连续数字
+String extractVerifyCode(const char* text) {
+  if (text == nullptr) return "";
+  
+  String result = "";
+  String currentNum = "";
+  
+  for (int i = 0; text[i] != '\0'; i++) {
+    if (text[i] >= '0' && text[i] <= '9') {
+      currentNum += text[i];
+    } else {
+      if (currentNum.length() >= 4) {
+        result = currentNum;  // 取第一个匹配的
+        break;
+      }
+      currentNum = "";
+    }
+  }
+  // 检查字符串末尾的数字
+  if (result.length() == 0 && currentNum.length() >= 4) {
+    result = currentNum;
+  }
+  return result;
+}
+
+// 发送纯文本到钉钉
+void sendTextToDingtalk(const PushChannel& channel, const String& text) {
+  if (channel.type != PUSH_TYPE_DINGTALK) return;
+  if (channel.url.length() == 0) return;
+  
+  HTTPClient http;
+  String webhookUrl = channel.url;
+  
+  // 如果配置了secret，需要添加签名
+  if (channel.key1.length() > 0) {
+    int64_t ts = getUtcMillis();
+    String sign = dingtalkSign(channel.key1, ts);
+    if (webhookUrl.indexOf('?') == -1) {
+      webhookUrl += "?";
+    } else {
+      webhookUrl += "&";
+    }
+    char tsBuf[21];
+    snprintf(tsBuf, sizeof(tsBuf), "%lld", ts);
+    webhookUrl += "timestamp=" + String(tsBuf) + "&sign=" + sign;
+  }
+  
+  http.begin(webhookUrl);
+  http.addHeader("Content-Type", "application/json");
+  String jsonData = "{\"msgtype\":\"text\",\"text\":{\"content\":\"" + jsonEscape(text) + "\"}}";
+  Serial.println("钉钉验证码推送: " + jsonData);
+  int httpCode = http.POST(jsonData);
+  
+  if (httpCode > 0) {
+    Serial.println("钉钉验证码推送响应码: " + String(httpCode));
+  } else {
+    Serial.println("钉钉验证码推送失败: " + http.errorToString(httpCode));
+  }
+  http.end();
+}
+
 // 发送单个推送通道
 void sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp) {
   if (!channel.enabled) return;
@@ -2003,7 +2083,7 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
   int httpCode = 0;
   String senderEscaped = jsonEscape(String(sender));
   String messageEscaped = jsonEscape(String(message));
-  String timestampEscaped = jsonEscape(String(timestamp));
+  String timestampEscaped = jsonEscape(formatTimestamp(timestamp));
   
   switch (channel.type) {
     case PUSH_TYPE_POST_JSON: {
@@ -2077,6 +2157,16 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       jsonData += "\"}}";
       Serial.println("钉钉: " + jsonData);
       httpCode = http.POST(jsonData);
+      
+      // 验证码检测与额外推送
+      String msgStr = String(message);
+      if (msgStr.indexOf("验证码") != -1) {
+        String code = extractVerifyCode(message);
+        if (code.length() > 0) {
+          Serial.println("检测到验证码: " + code);
+          sendTextToDingtalk(channel, code);
+        }
+      }
       break;
     }
 
